@@ -1,0 +1,42 @@
+package com.choicemod.common.event;
+
+import com.choicemod.common.registry.ChoiceEntry;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
+
+public class ChoiceApplier {
+
+    /**
+     * Вызывается на сервере когда игрок отправил выбор (0 = левый, 1 = правый).
+     */
+    public static void applyChoice(ServerPlayerEntity player, int index) {
+        ChoiceEntry[] pending = PlayerChoiceData.getPending(player);
+        if (pending == null) {
+            player.sendMessage(Text.literal("§cОшибка: нет активного выбора."), false);
+            return;
+        }
+
+        if (index < 0 || index >= pending.length) {
+            player.sendMessage(Text.literal("§cНеверный индекс выбора: " + index), false);
+            return;
+        }
+
+        // Снимаем предыдущий активный пакет
+        ChoiceEntry previous = PlayerChoiceData.getActive(player);
+        if (previous != null) {
+            previous.remove(player);
+        }
+
+        // Применяем новый
+        ChoiceEntry chosen = pending[index];
+        chosen.apply(player);
+
+        PlayerChoiceData.setActive(player, chosen);
+        PlayerChoiceData.clearPending(player);
+
+        player.sendMessage(
+                Text.literal("§e[Выбор] §fПакет «" + chosen.title + "§f» активирован!"),
+                false
+        );
+    }
+}

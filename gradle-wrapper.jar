@@ -1,0 +1,137 @@
+package com.choicemod.common.event;
+
+import com.choicemod.ChoiceMod;
+import com.choicemod.common.packet.ChoicePackets;
+import com.choicemod.common.registry.ChoiceEntry;
+import com.choicemod.common.registry.ChoiceRegistry;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.World;
+
+import java.util.Random;
+
+public class ChoiceScheduler implements ServerTickEvents.EndTick {
+
+    private static final Random RANDOM = new Random();
+
+    // Тики: 20 тиков = 1 секунда
+    private int tickCounter = 0;
+    private int voidFloorTick = 0;  // для choice_void_floor (каждые 10 сек)
+    private int levitateTick = 0;   // для choice_random_levitate (каждые 15 сек)
+    private int tpTick = 0;         // для choice_random_tp (каждые 30 сек)
+    private int bleedTick = 0;      // для choice_bleed (каждые 5 сек)
+
+    private static final int INTERVAL_TICKS = ChoiceMod.CHOICE_INTERVAL_SECONDS * 20;
+
+    @Override
+    public void onEndTick(MinecraftServer server) {
+        tickCounter++;
+        voidFloorTick++;
+        levitateTick++;
+        tpTick++;
+        bleedTick++;
+
+        // ─── Главный интервал — показываем выбор всем игрокам ─────────────
+        if (tickCounter >= INTERVAL_TICKS) {
+            tickCounter = 0;
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                sendChoiceScreen(player);
+            }
+        }
+
+        // ─── Void floor: блоки под ногами исчезают каждые 10 сек ──────────
+        if (voidFloorTick >= 200) {
+            voidFloorTick = 0;
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                if (player.getCommandTags().contains("choice_void_floor")) {
+                    removeBlocksUnderFeet(player);
+                }
+            }
+        }
+
+        // ─── Случайная левитация каждые 15 сек ────────────────────────────
+        if (levitateTick >= 300) {
+            levitateTick = 0;
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                if (player.getCommandTags().contains("choice_random_levitate")) {
+                    if (RANDOM.nextInt(3) == 0) { // 33% шанс каждые 15 сек
+                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                                net.minecraft.entity.effect.StatusEffects.LEVITATION, 60, 1, false, true, true));
+                    }
+                }
+            }
+        }
+
+        // ─── Случайный телепорт каждые 30 сек ────────────────────────────
+        if (tpTick >= 600) {
+            tpTick = 0;
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                if (player.getCommandTags().contains("choice_random_tp")) {
+                    randomTeleport(player);
+                }
+            }
+        }
+
+        // ─── Кровотечение каждые 5 сек ────────────────────────────────────
+        if (bleedTick >= 100) {
+            bleedTick = 0;
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                if (player.getCommandTags().contains("choice_bleed")) {
+                    if (player.getHealth() > 2.0f) {
+                        player.damage(player.getServerWorld(),
+                                player.getServerWorld().getDamageSources().magic(), 1.0f);
+                    }
+                }
+            }
+        }
+
+        // ─── Двойной урон от падения (обрабатывается в ChoiceApplier через мixin) ─
+        // Тег choice_double_fall проверяется при событии падения отдельно
+    }
+
+    /** Отправляем игроку пакет с двумя случайными пакетами выбора */
+    private void sendChoiceScreen(ServerPlayerEntity player) {
+        ChoiceEntry[] candidates = ChoiceRegistry.getTwoCandidates();
+        ChoiceEntry left  = candidates[0];
+        ChoiceEntry right = candidates[1];
+
+        // Сохраняем текущие кандидаты в PlayerData для последующего применения
+        PlayerChoiceData.setPending(player, left, right);
+
+        ServerPlayNetworking.send(player, new ChoicePackets.ShowChoicePayload(
+                left.title,  left.bonusDesc,  left.penaltyDesc,
+                right.title, right.bonusDesc, right.penaltyDesc,
+                20
+        ));
+    }
+
+    /** Убираем 3x3 блока под ногами игрока */
+    private void removeBlocksUnderFeet(ServerPlayerEntity player) {
+        World world = player.getWorld();
+        BlockPos center = player.getBlockPos().down();
+        for (int x = -1; x <= 1; x++) {
+            for (int z = -1; z <= 1; z++) {
+                BlockPos pos = center.add(x, 0, z);
+                if (!world.getBlockState(pos).isAir()) {
+                    world.breakBlock(pos, true); // true = дропнуть предмет
+                }
+            }
+        }
+        player.sendMessage(net.minecraft.text.Text.literal("§c💀 Земля уходит из-под ног!"), true);
+    }
+
+    /** Телепортируем игрока на случайные координаты в радиусе 100 блоков */
+    private void randomTeleport(ServerPlayerEntity player) {
+        double x = player.getX() + (RANDOM.nextDouble() * 200 - 100);
+        double z = player.getZ() + (RANDOM.nextDouble() * 200 - 100);
+        double y = player.getWorld().getTopY(
+                net.minecraft.world.Heightmap.Type.WORLD_SURFACE,
+                (int)x, (int)z
+        );
+        player.teleport(x, y + 1, z);
+        player.sendMessage(net.minecraft.text.Text.literal("§9🌌 Тебя кинуло в случайное место!"), true);
+    }
+}
